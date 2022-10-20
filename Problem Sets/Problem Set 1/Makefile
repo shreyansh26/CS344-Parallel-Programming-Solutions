@@ -53,3 +53,4 @@ reference_calc.o: reference_calc.cpp reference_calc.h
 
 clean:
 	rm -f *.o *.png hw
+	rm HW1
