@@ -142,7 +142,6 @@ void gaussian_blur(const unsigned char* const inputChannel,
 
   for(int yy=0; yy<filterWidth; yy++) {
     for(int xx=0; xx<filterWidth; xx++) {
-    
       int imX = absolute_image_position_x + xx - filterWidth/2;
       int imY = absolute_image_position_y + yy - filterWidth/2;
       int filterX = xx;
