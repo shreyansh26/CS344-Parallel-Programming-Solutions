@@ -187,8 +187,8 @@ float reduce_minmax(const float* const d_in, size_t size, bool min_flag) {
       // );
 
       // Method 2
-      dim3 block_dim(get_max_size(curr_size, BLOCK_SIZE));
-      reduce_minmax_kernel<<<block_dim, thread_dim, shared_mem_size>>>(d_curr_out, d_curr_in, min_flag);
+      dim3 reduce_block_dim(get_max_size(curr_size, BLOCK_SIZE));
+      reduce_minmax_kernel<<<reduce_block_dim, thread_dim, shared_mem_size>>>(d_curr_out, d_curr_in, min_flag);
       
       cudaDeviceSynchronize(); cudaGetLastError();
 
@@ -196,6 +196,7 @@ float reduce_minmax(const float* const d_in, size_t size, bool min_flag) {
       cudaFree(d_curr_in);
       d_curr_in = d_curr_out;
       
+      // Still do the above when curr_size < BLOCK_SIZE as that is the last step
       if(curr_size <  BLOCK_SIZE) 
          break;
 
@@ -221,6 +222,7 @@ __global__ void histogram_kernel(const float* const d_logLuminance, int *d_hist,
 }
 
 __global__ void scan_exclusive_kernel(unsigned int *d_cdf, int size) {
+   // Inclusive scan + Shift
    int idx = (blockIdx.x * blockDim.x) + threadIdx.x;
 
    if(idx >= size)
@@ -239,6 +241,16 @@ __global__ void scan_exclusive_kernel(unsigned int *d_cdf, int size) {
       }
       __syncthreads();
    }
+
+   // Shift elements to right
+   if(idx < size) {
+      int temp = d_cdf[idx];
+      __syncthreads();
+      d_cdf[idx+1] = temp;
+      __syncthreads();
+   }
+   if(idx == 0)
+      d_cdf[idx] = 0;
 }
 
 void your_histogram_and_prefixsum(const float* const d_logLuminance,
@@ -272,6 +284,7 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
 
    printf("Total bins: %d\n", numBins);
 
+   // Histogram operation for histogram of luminance
    int *d_hist;
    size_t hist_size = sizeof(int) * numBins;
    checkCudaErrors(cudaMalloc((void **)&d_hist, hist_size));
@@ -283,48 +296,12 @@ void your_histogram_and_prefixsum(const float* const d_logLuminance,
    histogram_kernel<<<histogram_block_dim, thread_dim>>>(d_logLuminance, d_hist, min_logLum, max_logLum, size, numBins);
    cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 
-   int h_out[numBins];
-   cudaMemcpy(h_out, d_hist, sizeof(int)*numBins, cudaMemcpyDeviceToHost);
-   for(int i = 0; i < 100; i++)
-      printf("histogram out %d\n", h_out[i]);
-
-   // cudaMemcpy(&h_out, d_cdf, sizeof(int)*numBins, cudaMemcpyDeviceToHost);
-   // h_out[0] = 0;
-   // cudaMemcpy(d_cdf, &h_out, sizeof(int)*numBins, cudaMemcpyHostToDevice);
-
-   // checkCudaErrors(cudaMemcpy(d_cdf, h_out, hist_size, cudaMemcpyHostToDevice));
+   // Scan (exclusive) for CDF calulation
    checkCudaErrors(cudaMemcpy(d_cdf, d_hist, hist_size, cudaMemcpyDeviceToDevice));
-   // checkCudaErrors(cudaMemset(d_cdf, 0, sizeof(float)));
-
-   cudaMemcpy(h_out, d_cdf, sizeof(int)*numBins, cudaMemcpyDeviceToHost);
-   for(int i = 0; i < 100; i++)
-      printf("cdf initialization %d\n", h_out[i]);
-
-   cudaMemcpy(h_out, d_hist, sizeof(int)*numBins, cudaMemcpyDeviceToHost);
-   for(int i = 0; i < 100; i++)
-      printf("hist mid out %d\n", h_out[i]);
 
    dim3 scan_block_dim(get_max_size(numBins, numBins));
    scan_exclusive_kernel<<<scan_block_dim, thread_dim>>>(d_cdf, size);
    cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
-   // checkCudaErrors(cudaMemcpy(d_cdf, d_hist, hist_size, cudaMemcpyDeviceToDevice));
-
-   int h_out_fin[numBins];
-   cudaMemcpy(h_out, d_cdf, sizeof(int)*numBins, cudaMemcpyDeviceToHost);
-
-   // Hack (to be corrected)
-   h_out_fin[0] = 0;
-   for(int i = 0; i < numBins-1; i++) {
-      h_out_fin[i+1] = h_out[i];
-   }
-
-   cudaMemcpy(d_cdf, h_out_fin, sizeof(int)*numBins, cudaMemcpyHostToDevice);
-   for(int i = 0; i < 100; i++)
-      printf("hist new out %d\n", h_out_fin[i]);
-
-   // cudaMemcpy(h_out, d_hist, sizeof(int)*numBins, cudaMemcpyDeviceToHost);
-   // for(int i = 0; i < 100; i++)
-   //    printf("hist new out %d\n", h_out[i]);
 
    checkCudaErrors(cudaFree(d_hist));
 }

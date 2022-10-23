@@ -42,9 +42,5 @@ void referenceCalculation(const float* const h_logLuminance, unsigned int* const
     h_cdf[i] = h_cdf[i - 1] + histo[i - 1];
   }
 
-  printf("Reference Histogram\n");
-  for(int i = 0; i < numBins; i++)
-      printf("%d ", h_cdf[i]);
-
   delete[] histo;
 }

@@ -60,3 +60,4 @@ student_func.o: student_func.cu utils.h
 clean:
 	rm -f *.o hw
 	find . -type f -name '*.exr' | grep -v memorial | xargs rm -f
+	rm HW3
