@@ -191,7 +191,6 @@ int main(int argc, char **argv) {
     timer.Start();
     transpose_serial<<<1, 1>>>(d_in, d_out);
     timer.Stop();
-
     cudaMemcpy(out, d_out, numBytes, cudaMemcpyDeviceToHost);
     printf("transpose_serial: %g ms.\nVerifying transpose...%s\n", 
 	       timer.Elapsed(), compare_matrices(out, gold_out) ? "Failed" : "Success");
