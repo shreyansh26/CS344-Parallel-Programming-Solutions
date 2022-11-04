@@ -26,9 +26,10 @@
 
 
 #include "utils.h"
+#include "timer.h"
 
 __global__
-void yourHisto(const unsigned int* const vals, //INPUT
+void yourHisto_naive(const unsigned int* const vals, //INPUT
                unsigned int* const histo,      //OUPUT
                int numVals)
 {
@@ -46,6 +47,87 @@ void yourHisto(const unsigned int* const vals, //INPUT
   atomicAdd(&histo[vals[idx]], 1);
 }
 
+__global__
+void yourHisto_grid_stride_loop(const unsigned int* const vals, //INPUT
+               unsigned int* const histo,      //OUPUT
+               int numVals)
+{
+  //TODO fill in this kernel to calculate the histogram
+  //as quickly as possible
+
+  //Although we provide only one kernel skeleton,
+  //feel free to use more if it will help you
+  //write faster code
+  int idx = (blockIdx.x * blockDim.x) + threadIdx.x;
+  int stride = blockDim.x * gridDim.x;
+
+  if(idx >= numVals)
+      return;
+
+  while(idx < numVals) {
+    atomicAdd(&histo[vals[idx]], 1);
+    idx += stride;
+  }
+}
+
+__global__
+void yourHisto_shmem_naive(const unsigned int* const vals, //INPUT
+               unsigned int* const histo,      //OUPUT
+               int numVals)
+{
+  //TODO fill in this kernel to calculate the histogram
+  //as quickly as possible
+
+  //Although we provide only one kernel skeleton,
+  //feel free to use more if it will help you
+  //write faster code
+  extern __shared__ unsigned int local_histo[];
+  local_histo[threadIdx.x] = 0;
+  __syncthreads();
+
+  int idx = (blockIdx.x * blockDim.x) + threadIdx.x;
+
+  if(idx >= numVals)
+      return;
+
+  atomicAdd(&local_histo[vals[idx]], 1);
+  __syncthreads();
+
+  // Only 1024 global memory writes
+  atomicAdd(&histo[threadIdx.x], local_histo[threadIdx.x]);
+}
+
+__global__
+void yourHisto_shmem_grid_stride_loop(const unsigned int* const vals, //INPUT
+               unsigned int* const histo,      //OUPUT
+               int numVals)
+{
+  //TODO fill in this kernel to calculate the histogram
+  //as quickly as possible
+
+  //Although we provide only one kernel skeleton,
+  //feel free to use more if it will help you
+  //write faster code
+  extern __shared__ unsigned int local_histo[];
+  local_histo[threadIdx.x] = 0;
+  __syncthreads();
+
+  int idx = (blockIdx.x * blockDim.x) + threadIdx.x;
+  int stride = blockDim.x * gridDim.x;
+
+  if(idx >= numVals)
+      return;
+
+  while(idx < numVals) {
+    atomicAdd(&local_histo[vals[idx]], 1);
+    idx += stride;
+  }
+  __syncthreads();
+
+  // Only 1024 global memory writes
+  atomicAdd(&histo[threadIdx.x], local_histo[threadIdx.x]);
+}
+
 int get_max_size(int n, int dim) {
   return (int)ceil((float) n / (float) dim) + 1;
 }
@@ -61,7 +143,54 @@ void computeHistogram(const unsigned int* const d_vals, //INPUT
   //feel free
   dim3 thread_dim(numBins);
   dim3 block_dim(get_max_size(numElems, numBins));
+  dim3 strided_block_dim(32*16);
 
-  yourHisto<<<block_dim, thread_dim>>>(d_vals, d_histo, numElems);
+  const int VAL_BYTES = numElems*sizeof(unsigned int);
+  const int HISTO_BYTES = numBins*sizeof(unsigned int);
+  GpuTimer timer;
+
+  unsigned int *d_vals_t, *d_histo_t, *d_vals_original, *d_histo_original;
+  cudaMalloc(&d_vals_t, VAL_BYTES);
+  cudaMalloc(&d_histo_t, HISTO_BYTES);
+  cudaMalloc(&d_vals_original, VAL_BYTES);
+  cudaMalloc(&d_histo_original, HISTO_BYTES);
+
+  cudaMemcpy(d_vals_original, d_vals, VAL_BYTES, cudaMemcpyDeviceToDevice);
+  cudaMemcpy(d_histo_original, d_histo, HISTO_BYTES, cudaMemcpyDeviceToDevice);
+
+  cudaMemcpy(d_vals_t, d_vals_original, VAL_BYTES, cudaMemcpyDeviceToDevice);
+  cudaMemcpy(d_histo_t, d_histo_original, HISTO_BYTES, cudaMemcpyDeviceToDevice);
+  timer.Start();
+  yourHisto_naive<<<block_dim, thread_dim>>>(d_vals_t, d_histo_t, numElems);
+  timer.Stop();
+  printf("yourHisto_naive: %g ms.\n", timer.Elapsed());
+  cudaMemcpy(d_histo, d_histo_t, HISTO_BYTES, cudaMemcpyDeviceToDevice);
+
+  cudaMemcpy(d_vals_t, d_vals_original, VAL_BYTES, cudaMemcpyDeviceToDevice);
+  cudaMemcpy(d_histo_t, d_histo_original, HISTO_BYTES, cudaMemcpyDeviceToDevice);
+  timer.Start();
+  yourHisto_grid_stride_loop<<<strided_block_dim, thread_dim>>>(d_vals_t, d_histo_t, numElems);
+  timer.Stop();
+  printf("yourHisto_grid_stride_loop: %g ms.\n", timer.Elapsed());
+  cudaMemcpy(d_histo, d_histo_t, HISTO_BYTES, cudaMemcpyDeviceToDevice);
+
+  cudaMemcpy(d_vals_t, d_vals_original, VAL_BYTES, cudaMemcpyDeviceToDevice);
+  cudaMemcpy(d_histo_t, d_histo_original, HISTO_BYTES, cudaMemcpyDeviceToDevice);
+  const int shared_mem_size = HISTO_BYTES;
+  timer.Start();
+  yourHisto_shmem_naive<<<block_dim, thread_dim, shared_mem_size>>>(d_vals_t, d_histo_t, numElems);
+  timer.Stop();
+  printf("yourHisto_shmem_naive: %g ms.\n", timer.Elapsed());
+  cudaMemcpy(d_histo, d_histo_t, HISTO_BYTES, cudaMemcpyDeviceToDevice);
+
+  cudaMemcpy(d_vals_t, d_vals_original, VAL_BYTES, cudaMemcpyDeviceToDevice);
+  cudaMemcpy(d_histo_t, d_histo_original, HISTO_BYTES, cudaMemcpyDeviceToDevice);
+  // const int shared_mem_size = HISTO_BYTES;
+  timer.Start();
+  yourHisto_shmem_grid_stride_loop<<<strided_block_dim, thread_dim, shared_mem_size>>>(d_vals_t, d_histo_t, numElems);
+  timer.Stop();
+  printf("yourHisto_shmem_grid_stride_loop: %g ms.\n", timer.Elapsed());
+  cudaMemcpy(d_histo, d_histo_t, HISTO_BYTES, cudaMemcpyDeviceToDevice);
+
   cudaDeviceSynchronize(); checkCudaErrors(cudaGetLastError());
 }
